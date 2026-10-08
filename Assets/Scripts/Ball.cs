@@ -1,0 +1,22 @@
+using UnityEngine;
+
+namespace DefaultNamespace
+{
+    public class Ball : MonoBehaviour
+    {
+        [SerializeField] private SpriteRenderer spriteRenderer;
+
+        public TubeColor Color { get; private set; }
+
+        public void Setup(TubeColor color, Sprite sprite)
+        {
+            Color = color;
+            spriteRenderer.sprite = sprite;
+        }
+
+        public void SetSprite(Sprite sprite)
+        {
+            spriteRenderer.sprite = sprite;
+        }
+    }
+}
