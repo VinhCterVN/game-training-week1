@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using DG.Tweening;
 
@@ -21,12 +22,14 @@ namespace DefaultNamespace
 
         [Header("Pour")] [SerializeField] private float exitOffset = 0.8f;
         [SerializeField] private float ballMoveDuration = 0.15f;
+        [SerializeField] private int pouringSortingOrderOffset = 100;
 
         [SerializeField] private int tubeIndex;
         [SerializeField] private float selectedOffset = 0.25f;
         [SerializeField] private float selectedScale = 1.05f;
         [SerializeField] private float moveDuration = 0.2f;
 
+        private float _tubeOffset = 0.05f;
         private Vector3 _originalPosition;
         private Vector3 _originalScale;
         private bool _isSelected;
@@ -34,15 +37,12 @@ namespace DefaultNamespace
         private Stack<TubeColor> _colorsStack;
         private List<Ball> _balls = new();
 
-        public int Count => _balls.Count;
+        private int Count => _balls.Count;
         public bool IsEmpty => _balls.Count == 0;
-        public bool IsFull => _balls.Count >= ballSlots.Length;
-        public TubeColor TopColor => _balls[_balls.Count - 1].Color;
+        private bool IsFull => _balls.Count >= ballSlots.Length;
+        private TubeColor TopColor => _balls.Last().Color;
 
-        private void Start()
-        {
-            SpawnBalls();
-        }
+        private void Start() => SpawnBalls();
 
         private void Awake()
         {
@@ -96,8 +96,8 @@ namespace DefaultNamespace
             if (IsEmpty) return 0;
 
             var top = TopColor;
-            int count = 0;
-            for (int i = _balls.Count - 1; i >= 0; --i)
+            var count = 0;
+            for (var i = _balls.Count - 1; i >= 0; --i)
             {
                 if (_balls[i].Color != top) break;
                 count++;
@@ -106,59 +106,86 @@ namespace DefaultNamespace
             return count;
         }
 
-// Trả về số bóng có thể đổ sang target (0 = không đổ được)
         public int GetPourAmount(Tube target)
         {
             if (target == this || IsEmpty || target.IsFull) return 0;
-            if (!target.IsEmpty && target.TopColor != TopColor) return 0;
 
-            int freeSpace = target.ballSlots.Length - target.Count;
+            var freeSpace = target.ballSlots.Length - target.Count;
             return Mathf.Min(GetTopSameColorCount(), freeSpace);
         }
 
-// Đổ `amount` bóng sang target, trả về Sequence để biết khi nào xong
         public Sequence PourTo(Tube target, int amount)
         {
-            Sequence sequence = DOTween.Sequence();
+            var sequence = DOTween.Sequence();
+            var transfers =
+                new List<(Ball ball, Transform targetSlot, int targetSlotIndex, Vector3 originalLocalScale)>();
+            var originalBallSortingOrders = _balls
+                .Select(ball => (ball, sortingOrder: ball.SortingOrder))
+                .ToList();
 
-            // Điểm bóng bay lên trên miệng ống nguồn (tính 1 lần lúc bắt đầu)
-            Vector3 exitPoint = ballSlots[ballSlots.Length - 1].position + Vector3.up * exitOffset;
-
-            for (int i = 0; i < amount; ++i)
+            var tubeRenderer = GetComponent<SpriteRenderer>();
+            var originalTubeSortingOrder = tubeRenderer.sortingOrder;
+            tubeRenderer.sortingOrder += pouringSortingOrderOffset;
+            foreach (var (ball, _) in originalBallSortingOrders)
             {
-                // Cập nhật dữ liệu ngay lập tức, animation chạy sau
-                Ball ball = _balls[_balls.Count - 1];
+                ball.SortingOrder += pouringSortingOrderOffset + 1;
+            }
+
+            for (var i = 0; i < amount; ++i)
+            {
+                var ball = _balls.Last();
                 _balls.RemoveAt(_balls.Count - 1);
 
-                int targetSlotIndex = target._balls.Count;
-                Transform targetSlot = target.ballSlots[targetSlotIndex];
+                var targetSlotIndex = target._balls.Count;
+                var targetSlot = target.ballSlots[targetSlotIndex];
+                var originalLocalScale = ball.transform.localScale;
                 target._balls.Add(ball);
-
-                ball.transform.SetParent(null, true); // tách khỏi slot cũ để di chuyển tự do
-
-                // Bay lên -> bay đến slot đích -> gắn vào slot
-                sequence.Append(ball.transform.DOMove(exitPoint, ballMoveDuration).SetEase(Ease.OutQuad));
-                sequence.Append(ball.transform.DOMove(targetSlot.position, ballMoveDuration).SetEase(Ease.InQuad));
-                sequence.AppendCallback(() =>
-                {
-                    ball.transform.SetParent(targetSlot);
-                    ball.transform.position = targetSlot.position;
-                    ball.SetSprite(target.GetSprite(ball.Color, targetSlotIndex == 0));
-                });
+                transfers.Add((ball, targetSlot, targetSlotIndex, originalLocalScale));
             }
+
+            var targetPosition = target.transform.position;
+            var distance = _originalPosition.x - targetPosition.x;
+            distance += distance > 0 ? -exitOffset : exitOffset;
+
+            sequence
+                .Append(transform.DOMoveY(_originalPosition.y + 0.3f, 0.15f))
+                .Append(transform.DOMoveX(_originalPosition.x - distance, 0.5f))
+                .Append(transform.DORotate(new Vector3(0, 0, distance < 0 ? -15f : 15f), 0.5f))
+                .AppendCallback(() =>
+                {
+                    foreach (var transfer in transfers)
+                    {
+                        transfer.ball.transform.SetParent(transfer.targetSlot);
+                        transfer.ball.transform.position = transfer.targetSlot.position;
+                        transfer.ball.SetSprite(target.GetSprite(transfer.ball.Color, transfer.targetSlotIndex == 0));
+                        transfer.ball.transform.rotation = Quaternion.identity;
+                        transfer.ball.transform.DOScale(transfer.originalLocalScale, ballMoveDuration)
+                            .SetEase(Ease.OutQuad);
+                    }
+                })
+                .Append(transform.DORotate(Vector3.zero, 0.3f))
+                .Append(transform.DOMove(_originalPosition, 0.3f))
+                .AppendCallback(() =>
+                {
+                    tubeRenderer.sortingOrder = originalTubeSortingOrder;
+                    foreach (var (ball, sortingOrder) in originalBallSortingOrders)
+                    {
+                        ball.SortingOrder = sortingOrder;
+                    }
+                });
 
             return sequence;
         }
 
         private void SpawnBalls()
         {
-            TubeColor[] colors = _colorsStack.ToArray();
+            var colors = _colorsStack.ToArray();
             Array.Reverse(colors);
 
-            for (int i = 0; i < colors.Length; ++i)
+            for (var i = 0; i < colors.Length; ++i)
             {
-                bool isBottom = (i == 0);
-                Ball ball = Instantiate(ballPrefab, ballSlots[i].position, Quaternion.identity, ballSlots[i]);
+                var isBottom = (i == 0);
+                var ball = Instantiate(ballPrefab, ballSlots[i].position, Quaternion.identity, ballSlots[i]);
                 ball.Setup(colors[i], GetSprite(colors[i], isBottom));
                 _balls.Add(ball);
             }
@@ -166,19 +193,20 @@ namespace DefaultNamespace
 
         private Sprite GetSprite(TubeColor color, bool isBottom)
         {
-            switch (color)
+            return color switch
             {
-                case TubeColor.Red: return isBottom ? redBottomSprite : redSprite;
-                case TubeColor.Blue: return isBottom ? blueBottomSprite : blueSprite;
-                case TubeColor.Green: return isBottom ? greenBottomSprite : greenSprite;
-                default: return null;
-            }
+                TubeColor.Red => isBottom ? redBottomSprite : redSprite,
+                TubeColor.Blue => isBottom ? blueBottomSprite : blueSprite,
+                TubeColor.Green => isBottom ? greenBottomSprite : greenSprite,
+                _ => null
+            };
         }
 
-        private void OnMouseDown()
-        {
-            FindObjectOfType<GameManager>().OnTubeClicked(this);
-        }
+        public bool CanPourInto(Tube tube) =>
+            this._balls.Count > 0 && tube._balls.Count < tube.ballSlots.Length &&
+            (tube._balls.Count == 0 || tube.TopColor == this.TopColor);
+
+        private void OnMouseDown() => FindObjectOfType<GameManager>().OnTubeClicked(this);
     }
 }
 

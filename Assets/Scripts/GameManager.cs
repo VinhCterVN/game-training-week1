@@ -27,23 +27,25 @@ namespace DefaultNamespace
                 return;
             }
 
-            int amount = _selectedTube.GetPourAmount(tube);
-            if (amount <= 0)
+            bool canPour = _selectedTube.CanPourInto(tube);
+            if (canPour)
+            {
+                _isBusy = true;
+                var pourAmount = _selectedTube.GetPourAmount(tube);
+                var sequence = _selectedTube.PourTo(tube, pourAmount);
+                sequence.OnComplete(() =>
+                {
+                    _isBusy = false;
+                    _selectedTube = null;
+                });
+                _selectedTube.Deselect();
+            }
+            else
             {
                 _selectedTube.Deselect();
-                _selectedTube = null;
-                return;
+                _selectedTube = tube;
+                _selectedTube.Select();
             }
-
-            _isBusy = true;
-            Tube from = _selectedTube;
-            _selectedTube = null;
-
-            from.PourTo(tube, amount).OnComplete(() =>
-            {
-                from.Deselect();
-                _isBusy = false;
-            });
         }
     }
 }

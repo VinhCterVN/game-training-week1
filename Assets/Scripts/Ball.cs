@@ -7,6 +7,11 @@ namespace DefaultNamespace
         [SerializeField] private SpriteRenderer spriteRenderer;
 
         public TubeColor Color { get; private set; }
+        public int SortingOrder
+        {
+            get => spriteRenderer.sortingOrder;
+            set => spriteRenderer.sortingOrder = value;
+        }
 
         public void Setup(TubeColor color, Sprite sprite)
         {
